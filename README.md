@@ -7,6 +7,18 @@
 
 ## 快速开始（第一次用就看这里）
 
+### 方式一：下载 exe，免安装（推荐给普通用户）
+
+到 **[Releases](https://github.com/Six-Elaine/screen-marker-counter/releases/latest)** 下载
+`screen-marker-counter-v1.0.0-win64.exe`，放到任意目录双击即可，**不需要装 Python**。
+
+- 仅支持 Windows 10 / 11
+- 首次启动约 5~10 秒（单文件版需要自解压，属正常）
+- `config.json` / `template.png` / `counter_log.csv` 会生成在 **exe 同级目录**
+- 若被 SmartScreen 拦下（提示「未知发布者」）：点「更多信息」→「仍要运行」（未做代码签名）
+
+### 方式二：跑源码（开发 / 想改代码）
+
 **环境要求**
 
 | 项 | 要求 |
@@ -120,6 +132,9 @@ python make_shortcut.py
 | 现象 | 原因 / 解决 |
 |---|---|
 | 报 `No module named 'tkinter'` | 用的 Python 不带 tkinter。换 python.org 官方安装包，安装时勾 `tcl/tk and IDLE` |
+| exe 首次启动要等好几秒 | 单文件版要自解压，属正常（5~10 秒）；嫌慢改用源码版或 `--onedir` 打包 |
+| exe 被 SmartScreen 拦截 | 未做代码签名。点「更多信息」→「仍要运行」 |
+| exe 双击完全没反应 | 看 **exe 同级目录**是否生成了 `startup_error.log`，里面有完整堆栈 |
 | 双击 `.py` 窗口一闪而过 | 用命令行 `python screen_counter.py` 跑，就能看到报错信息；也可先跑 `python screen_counter.py --selftest` 自检 |
 | 双击没反应，像是启动不了 | 多半**已经有一个实例在运行**（单实例保护会把老窗口提到前台）。另外杀掉进程后**要等 5 秒以上**再启动，互斥量释放有延迟 |
 | F8 / F9 / F10 热键无效 | 以**管理员身份**运行（`keyboard` 库需要足够权限才能挂全局热键）；或直接用界面上的按钮 |
@@ -130,14 +145,19 @@ python make_shortcut.py
 
 ## 打包成 exe（给不想装 Python 的人）
 
-用 PyInstaller 打一个单文件 exe，对方双击即用：
-
 ```bash
 pip install pyinstaller
-pyinstaller --noconfirm --onefile --windowed --name 屏幕标识计数器 screen_counter.py
+pyinstaller --noconfirm --onefile --windowed --name ScreenMarkerCounter screen_counter.py
 ```
 
-产物在 `dist\屏幕标识计数器.exe`。注意：`template.png` / `config.json` 会在 exe 同级目录生成，用法与源码版一致。
+产物 `dist\ScreenMarkerCounter.exe`（约 70 MB，含 Python 运行时与 OpenCV），改个名就能分发。
+
+几个要点：
+
+- `--windowed` = 不弹黑框控制台。代价是启动报错看不见，所以程序内置了兜底：出错会把堆栈写进 **`startup_error.log`（exe 同级）** 并弹窗提示
+- `--onefile` 每次启动要自解压到临时目录，首启约 5~10 秒；嫌慢可换 `--onedir`（生成文件夹，启动更快但不便单个文件分发）
+- 代码里已处理 `sys.frozen`：配置/模板/日志写在 **exe 同级目录**，不会随临时解压目录丢失
+- 未签名，别人首次运行会被 SmartScreen 提示一次
 
 ## 文件说明
 
