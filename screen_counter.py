@@ -535,8 +535,9 @@ class App:
         sel.pack(fill='x', padx=8, pady=4)
         tk.Button(sel, text='① 框选监测区域', width=15,
                   command=self._select_region).grid(row=0, column=0, **pad)
-        tk.Button(sel, text='② 截取标识模板', width=15,
-                  command=self._capture_template).grid(row=0, column=1, **pad)
+        self.capture_btn = tk.Button(sel, text='② 截取标识模板', width=15,
+                                     command=self._capture_template)
+        self.capture_btn.grid(row=0, column=1, **pad)
         tk.Button(sel, text='从图片加载模板', width=14,
                   command=self._load_template_dialog).grid(row=0, column=2, **pad)
         tk.Button(sel, text='测试截图', width=9,
@@ -552,8 +553,9 @@ class App:
         self.tpl_src_var = tk.StringVar(
             value=self.cfg.get('tpl_src', TPL_SRC_REGION))
         tk.OptionMenu(sel, self.tpl_src_var, TPL_SRC_REGION, TPL_SRC_SCREEN,
-                      command=lambda _v: self._save_config()).grid(
+                      command=lambda _v: self._tpl_src_changed()).grid(
             row=2, column=1, columnspan=2, sticky='w', **pad)
+        self._tpl_src_changed(save=False)
 
         self.run_frame = run = tk.LabelFrame(self.root, text='2. 运行')
         run.pack(fill='x', padx=8, pady=4)
@@ -664,6 +666,14 @@ class App:
             self.status_label.pack(fill='x', padx=10, pady=(0, 6))
             self.root.geometry('')
 
+    def _tpl_src_changed(self, save=True):
+        """切换模板来源时同步按钮文案（整屏模式下 ② 一次框选定区域+模板）"""
+        screen_mode = self.tpl_src_var.get() == TPL_SRC_SCREEN
+        self.capture_btn.config(
+            text='② 框选区域+模板' if screen_mode else '② 截取标识模板')
+        if save:
+            self._save_config()
+
     def _apply_topmost(self):
         try:
             self.root.attributes('-topmost', bool(self.topmost_var.get()))
@@ -704,8 +714,8 @@ class App:
 
         来源二选一：
           - TPL_SRC_REGION：在「监测区域的冻结帧」上裁切 → 同源同尺度，最稳
-          - TPL_SRC_SCREEN：在「整屏冻结帧」上任意位置裁切 → 灵活，用于先取模板后框区域
-        两种模式都会做尺寸/跨屏校验，避免出现「匹配永远失败」或「相似度恒为 1」的废模板。
+          - TPL_SRC_SCREEN：在「整屏冻结帧」上框选，框选范围**同时作为监测区域**
+            （位置与大小完全一致），模板即该范围 → 一次框选定稿，无需再点①
         """
         if self._capture_active:
             return
@@ -715,13 +725,15 @@ class App:
         screen_mode = (src == TPL_SRC_SCREEN)
         if not screen_mode and region is None:
             messagebox.showinfo('提示', '请先点「① 框选监测区域」，再截取模板。\n'
-                                        '（或把「模板来源」切到「整屏任意位置」）')
+                                        '（或把「模板来源」切到「整屏任意位置」，'
+                                        '框选范围会自动成为监测区域）')
             return
         try:
             if screen_mode:
                 snap, origin = self._snapshot_screen()
-                hint = '来源：当前显示器整屏（已冻结）　框住标识本身，越紧凑越准'
-                title = '截取标识模板（整屏任意位置）'
+                hint = ('框住要监测的范围（已冻结）——它会同时成为监测区域与模板\n'
+                        '越贴合标识越好；确认后位置与大小将覆盖原监测区域')
+                title = '框选监测区域 + 标识模板（整屏任意位置）'
             else:
                 snap, origin = self._snapshot_region(region)
                 hint = (f'来源：监测区域 {region[2]}×{region[3]}（已冻结）　'
@@ -742,34 +754,38 @@ class App:
             if crop.size == 0:
                 self.status_var.set('选区无效')
                 return
-            # 校验：模板必须能落在监测区域内，且不能大到失去区分度
-            ok, warn, note = self._validate_template(w, h, region)
-            if not ok:
-                self.status_var.set('模板不可用：' + note)
-                messagebox.showwarning('模板不可用', note)
-                return          # 不覆盖已有模板
-            # 跨屏提示：两屏缩放比例不同会导致像素尺度不一致
-            if screen_mode and region is not None:
-                m_tpl = self._monitor_at(origin[0] + x + w // 2, origin[1] + y + h // 2)
-                m_reg = self._monitor_at(region[0] + region[2] // 2,
-                                         region[1] + region[3] // 2)
-                if m_tpl is not None and m_reg is not None and m_tpl != m_reg:
-                    note = ('模板取自显示器 %d、监测区域在显示器 %d；'
-                            '若两块屏缩放比例不同，匹配会不准' % (m_tpl, m_reg))
-                    warn = True
+            note = ''
+            if screen_mode:
+                # 框选范围即监测区域（位置 + 大小完全一致）
+                new_region = [origin[0] + x, origin[1] + y, w, h]
+                with self.lock:
+                    self.region = new_region
+                    self.view = {'score': None, 'frame': None, 'marks': [],
+                                 'error': None, 'warn': None}
+                    self._last_gray = None
+                    self._frozen_since = None
+                self.region_var.set(
+                    f'监测区域：({new_region[0]},{new_region[1]}) {w}×{h}')
+                mon = self._monitor_at(new_region[0] + w // 2, new_region[1] + h // 2)
+                note = ('监测区域已同步为框选范围%s；模板＝整块区域，'
+                        '相似度是整块比对，建议把「相似度阈值」降到 0.5~0.7，'
+                        '想更稳可切回「监测区域内」再框一次更小的标识'
+                        % (('（显示器 %d）' % mon) if mon else ''))
+            else:
+                # 区域内模式：模板必须能落在监测区域内，且不能大到失去区分度
+                ok, _warn, note = self._validate_template(w, h, region)
+                if not ok:
+                    self.status_var.set('模板不可用：' + note)
+                    messagebox.showwarning('模板不可用', note)
+                    return          # 不覆盖已有模板
             try:
                 cv2.imencode('.png', crop)[1].tofile(TEMPLATE_PATH)
             except Exception:
                 pass
             self._apply_template(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY),
                                  f'{w}×{h} (template.png)')
-            msg = '模板已截取'
-            if region is None:
-                msg += '（尚未设监测区域：运行时只在监测区域内匹配，设好区域后才会计数）'
-                warn = True
-            elif note:
-                msg += '（' + note + '）'
-            self.status_var.set(msg)
+            self._save_config()
+            self.status_var.set('模板已截取 — ' + note if note else '模板已截取')
         finally:
             self._exit_capture_mode()
 
@@ -1144,9 +1160,13 @@ class App:
             '· 「统计可见数量」模式：实时统计区域内标识出现了几个并记峰值。\n'
             '· 框选时会先冻结一帧画面（同系统截图工具）：拖拽框选、拖动选区、\n'
             '  拖八个手柄微调，Enter 或「确认」生效，Esc / 右键 / 「取消」放弃。\n'
-            '· 「模板来源」可选：监测区域内（默认，同源同尺度最稳）／整屏任意位置\n'
-            '  （更灵活，可先取模板再框区域，需自行保证屏幕缩放一致）；\n'
-            '  模板不能大于监测区域（会被拒绝），占区域 >60% 会告警。\n'
+            '· 「模板来源」可选：\n'
+            '  · 监测区域内（默认，同源同尺度最稳）：先①框区域，再②在区域内框标识。\n'
+            '  · 整屏任意位置：②一次框选定稿 —— 框选范围会同时成为监测区域\n'
+            '    （位置与大小完全一致）并作为模板；适合「我框哪就监测哪」。\n'
+            '    代价：模板＝整块区域，相似度是整块比对，建议阈值降到 0.5~0.7；\n'
+            '    想更稳就切回「监测区域内」再框一次更小的标识。\n'
+            '· 区域内模式下模板不能大于监测区域（会被拒绝），占区域 >60% 会告警。\n'
             '· 框选期间会自动暂停监测，结束后自动恢复。\n'
             '· 挡视野怎么办：点「迷你模式」缩成右上角小条；或点窗口最小化\n'
             '  （最小化后计数照常进行，数字会显示在任务栏标题里）；\n'
@@ -1338,7 +1358,7 @@ def capturetest():
 
 
 def tpltest():
-    """模板来源灵活性 + 尺寸校验：区域内 / 整屏任意 / 无区域 / 模板过大被拒"""
+    """模板来源：区域内截取 / 整屏框选（区域=框选范围）/ 尺寸校验 / 取消不覆盖"""
     restore = _use_temp_paths()
     orig_run = SnapshotSelector.run
     orig_warn, orig_info = messagebox.showwarning, messagebox.showinfo
@@ -1357,40 +1377,50 @@ def tpltest():
         root.withdraw()
         app = App(root)
 
-        # 2) 整屏任意位置：选区比监测区域大 → 拒绝，且不覆盖旧模板
+        # 2) 整屏模式：框选范围 = 监测区域（位置+大小完全一致），模板即该范围
+        _snap, origin = app._snapshot_screen()
         with app.lock:
-            app.region = [100, 100, 200, 150]
+            app.region = [100, 100, 200, 150]        # 旧区域，应被覆盖
         app.tpl_src_var.set(TPL_SRC_SCREEN)
-        SnapshotSelector.run = lambda self: (10, 10, 400, 300)
-        app._capture_template()
-        assert app.tpl_gray is None, '过大的模板不应生效'
-
-        # 3) 整屏任意位置：正常尺寸 → 生效
         SnapshotSelector.run = lambda self: (10, 10, 30, 20)
         app._capture_template()
         assert app.tpl_gray is not None, '整屏模式应能截取模板'
         assert app.tpl_gray.shape == (20, 30), app.tpl_gray.shape
+        assert app.region == [origin[0] + 10, origin[1] + 10, 30, 20], \
+            '监测区域未同步为框选范围: %r' % (app.region,)
+        assert '30×20' in app.region_var.get(), app.region_var.get()
 
-        # 4) 整屏任意位置 + 尚无监测区域 → 允许先取模板（运行时才开始匹配）
+        # 3) 整屏模式：原本没有监测区域也能一次框选定稿
         with app.lock:
             app.region = None
         SnapshotSelector.run = lambda self: (5, 5, 16, 12)
         app._capture_template()
+        assert app.region == [origin[0] + 5, origin[1] + 5, 16, 12], app.region
         assert app.tpl_gray.shape == (12, 16), app.tpl_gray.shape
 
+        # 4) 整屏模式：取消 → 区域与模板都不动
+        keep_region, keep_tpl = list(app.region), app.tpl_gray
+        SnapshotSelector.run = lambda self: None
+        app._capture_template()
+        assert app.region == keep_region, '取消后不应改动监测区域'
+        assert app.tpl_gray is keep_tpl, '取消后不应覆盖模板'
+
         # 5) 区域内模式 + 无区域 → 直接提示并返回，不进入框选
+        with app.lock:
+            app.region = None
         app.tpl_src_var.set(TPL_SRC_REGION)
         called = []
         SnapshotSelector.run = lambda self: called.append(1) or None
         app._capture_template()
         assert not called, '无监测区域时不应进入框选'
 
-        # 6) 区域内模式：正常路径仍然可用
+        # 6) 区域内模式：正常路径仍然可用，且不改动监测区域
         with app.lock:
             app.region = [100, 100, 200, 150]
         SnapshotSelector.run = lambda self: (12, 8, 40, 24)
         app._capture_template()
         assert app.tpl_gray.shape == (24, 40), app.tpl_gray.shape
+        assert app.region == [100, 100, 200, 150], '区域内模式不应改动监测区域'
 
         app._stop.set()
         root.destroy()
