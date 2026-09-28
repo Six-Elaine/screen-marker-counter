@@ -50,7 +50,18 @@ try:
 except Exception:
     PIL_OK = False
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def _base_dir():
+    """程序所在目录。
+
+    打包成 exe（PyInstaller）后 __file__ 指向临时解压目录（sys._MEIPASS），
+    配置/模板/日志若跟着它走会在每次启动时丢失 —— 所以 frozen 时用 exe 自身所在目录。
+    """
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+BASE_DIR = _base_dir()
 CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
 TEMPLATE_PATH = os.path.join(BASE_DIR, 'template.png')
 LOG_PATH = os.path.join(BASE_DIR, 'counter_log.csv')
@@ -1542,6 +1553,35 @@ def main():
     root.mainloop()
 
 
+def _run_gui_safely():
+    """打包成 exe（windowed）后没有控制台，启动报错会表现为"双击没反应"。
+
+    这里兜底：把 traceback 写到 exe 同目录的 startup_error.log，并弹窗告知。
+    """
+    try:
+        main()
+    except Exception:
+        import traceback
+        detail = traceback.format_exc()
+        path = os.path.join(BASE_DIR, 'startup_error.log')
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                f.write('版本: %s\n\n%s' % (WINDOW_TITLE, detail))
+        except Exception:
+            pass
+        try:
+            r = tk.Tk()
+            r.withdraw()
+            messagebox.showerror(
+                '启动失败',
+                '程序启动时出错，详情已写入:\n%s\n\n%s'
+                % (path, detail.strip().splitlines()[-1] if detail.strip() else ''))
+            r.destroy()
+        except Exception:
+            pass
+        sys.exit(1)
+
+
 if __name__ == '__main__':
     if '--selftest' in sys.argv:
         selftest()
@@ -1555,4 +1595,4 @@ if __name__ == '__main__':
     elif '--tpltest' in sys.argv:
         sys.exit(0 if tpltest() else 1)
     else:
-        main()
+        _run_gui_safely()
