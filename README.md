@@ -3,6 +3,41 @@
 盯住屏幕上的一块区域，识别其中是否出现某个特定标识，出现一次就自动 +1。
 典型场景：游戏里某个提示/图标/文字出现次数统计、界面元素出现频次记录。
 
+> Windows 桌面工具：纯本地运行，不上传任何数据、不联网。识别基于屏幕像素，不读游戏内存。
+
+## 快速开始（第一次用就看这里）
+
+**环境要求**
+
+| 项 | 要求 |
+|---|---|
+| 操作系统 | Windows 10 / 11（用了 Windows 专有抓屏与热键 API，不支持 macOS / Linux） |
+| Python | **3.10 以上，且必须带 tkinter** —— 请从 [python.org](https://www.python.org/downloads/) 下载官方安装包，安装时勾选 `tcl/tk and IDLE` |
+
+> 别用微软商店版、精简版或 conda 极简环境，那些经常没有 tkinter，会报 `No module named 'tkinter'`。
+
+**① 装依赖**
+
+```bash
+pip install -r requirements.txt
+```
+
+**② 启动**
+
+```bash
+python screen_counter.py
+```
+
+想双击启动：先 `pip install pywin32`，再 `python make_shortcut.py` 生成桌面快捷方式。
+
+**③ 首次设置（三步）**
+
+1. 让屏幕上出现你要监测的标识 → 点「① 框选监测区域」，拖拽框住标识**可能出现的范围**
+2. 点「② 截取标识模板」，框住**标识本身**（越紧凑越准）
+3. 点「开始监测」→ 标识出现即计数 +1，事件写入同目录 `counter_log.csv`
+
+**没有现成模板**：仓库里不含 `template.png`（那是使用者自己的截图），第一次用必须自己按上面第 2 步截一次。
+
 ## 特性
 
 - **两种计数模式**：出现即计数（上升沿，防重复）/ 统计可见数量（多点匹配 + 峰值记录）
@@ -16,10 +51,10 @@
 ## 安装
 
 ```bash
-pip install opencv-python mss Pillow keyboard numpy
+pip install -r requirements.txt
 ```
 
-> 注意：需要带 **tkinter** 的 Python（部分精简发行版没有）。
+> 注意：需要带 **tkinter** 的 Python（部分精简发行版没有，会报 `No module named 'tkinter'`）。
 
 ## 运行
 
@@ -80,10 +115,37 @@ python make_shortcut.py
 - 框选仅支持鼠标所在的单个显示器；跨屏切换请先把鼠标移到目标显示器
 - 屏幕分辨率变化后旧坐标会失效，状态栏会提示重新框选
 
+## 常见问题
+
+| 现象 | 原因 / 解决 |
+|---|---|
+| 报 `No module named 'tkinter'` | 用的 Python 不带 tkinter。换 python.org 官方安装包，安装时勾 `tcl/tk and IDLE` |
+| 双击 `.py` 窗口一闪而过 | 用命令行 `python screen_counter.py` 跑，就能看到报错信息；也可先跑 `python screen_counter.py --selftest` 自检 |
+| 双击没反应，像是启动不了 | 多半**已经有一个实例在运行**（单实例保护会把老窗口提到前台）。另外杀掉进程后**要等 5 秒以上**再启动，互斥量释放有延迟 |
+| F8 / F9 / F10 热键无效 | 以**管理员身份**运行（`keyboard` 库需要足够权限才能挂全局热键）；或直接用界面上的按钮 |
+| 识别不到标识 | ① 模板要框**标识本身**、越紧凑越准；② 状态栏看实时相似度，区分不开就调「相似度阈值」（默认 0.80）；③ 改了屏幕缩放比例（如 100%→125%）后模板会失效，需重新截 |
+| 底部状态栏出现 ⚠ | 说明监测区域长时间无变化或被遮挡（锁屏、游戏最小化、被别的窗口盖住），此时抓不到画面 |
+| 窗口关不掉 / 找不到叉 | 按 **F10**，或用「退出」按钮，或右键窗口选退出；实在不行任务管理器结束 `pythonw.exe` |
+| 计数一直在涨但屏幕上没有标识 | 模板太大或阈值太低（相似度恒高）。重新截一个更小的模板，或调高阈值 |
+
+## 打包成 exe（给不想装 Python 的人）
+
+用 PyInstaller 打一个单文件 exe，对方双击即用：
+
+```bash
+pip install pyinstaller
+pyinstaller --noconfirm --onefile --windowed --name 屏幕标识计数器 screen_counter.py
+```
+
+产物在 `dist\屏幕标识计数器.exe`。注意：`template.png` / `config.json` 会在 exe 同级目录生成，用法与源码版一致。
+
 ## 文件说明
 
 | 文件 | 说明 |
 |---|---|
 | `screen_counter.py` | 主程序（界面 + 识别 + 计数） |
+| `requirements.txt` | 运行依赖清单 |
 | `make_shortcut.py` | 生成桌面快捷方式 |
 | `window_capture.py` | 窗口离屏捕获探针（用于验证某程序能否被遮挡识别） |
+
+运行时自动生成（已在 `.gitignore` 中，不随仓库分发）：`config.json`（配置）、`template.png`（标识模板）、`counter_log.csv`（计数日志）。
